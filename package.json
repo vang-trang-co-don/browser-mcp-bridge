@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build:server": "tsc",
-    "build:extension": "bun build extension/src/background.ts extension/src/content.ts extension/src/injected.ts extension/src/popup.ts --outdir extension/dist",
+    "build:extension": "esbuild extension/src/*.ts --outdir=extension/dist",
     "build": "npm run build:server && npm run build:extension",
     "start": "node dist/index.js",
     "dev": "tsc -w"
@@ -23,6 +23,7 @@
     "@types/firefox-webext-browser": "^143.0.1",
     "@types/node": "^22.10.1",
     "@types/ws": "^8.5.13",
+    "esbuild": "^0.28.2",
     "typescript": "^5.7.2"
   }
 }
