@@ -7,7 +7,8 @@ Cầu nối phiên duyệt web thực tế (Firefox/Chrome) với bất kỳ AI 
 ## 🚀 Cài Đặt (Cho Máy Mới / Mọi Agent)
 
 ```bash
-git clone <repo_url> && cd browser-mcp-bridge
+git clone https://github.com/vang-trang-co-don/browser-mcp-bridge.git
+cd browser-mcp-bridge
 npm install && npm run build
 ```
 
