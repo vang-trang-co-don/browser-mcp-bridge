@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      width: 260px;
+      padding: 14px;
+      font-family: system-ui, -apple-system, sans-serif;
+      margin: 0;
+      color: #1f2937;
+      background: #f9fafb;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 12px;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .online {
+      background: #d1fae5;
+      color: #065f46;
+    }
+    .offline {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .dot-green { background: #10b981; }
+    .dot-red { background: #ef4444; }
+    .desc {
+      font-size: 11px;
+      color: #6b7280;
+      margin-top: 10px;
+      line-height: 1.4;
+    }
+    .port-info {
+      font-family: monospace;
+      font-size: 11px;
+      background: #e5e7eb;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span>🌐 Browser MCP Bridge</span>
+  </div>
+  <div id="statusContainer">
+    <div class="status-badge offline">
+      <span class="dot dot-red"></span>
+      <span id="statusText">Checking...</span>
+    </div>
+  </div>
+  <div class="desc">
+    Relay: <span class="port-info">ws://127.0.0.1:8765</span><br>
+    Connects active tab session directly to your AI agent.
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+{
+  "name": "browser-mcp-bridge",
+  "version": "1.0.0",
+  "description": "Authenticated browser session bridge for MCP agents using Anthropic official SDK",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "browser-mcp-bridge": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "tsc && node dist/index.js",
+    "dev": "tsc -w"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.6.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.2"
+  }
+}
