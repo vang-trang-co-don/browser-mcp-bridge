@@ -1,4 +1,5 @@
 import { WebSocketServer, WebSocket } from "ws";
+import { createRequestId } from "./shared/types.js";
 export class BrowserRelay {
     port;
     wss = null;
@@ -21,25 +22,27 @@ export class BrowserRelay {
                     this.activeClient = ws;
                     ws.on("message", (raw) => {
                         try {
-                            const msg = JSON.parse(raw.toString());
-                            if (msg.type === "TAB_UPDATE") {
+                            const msg = JSON.parse(raw.toString("utf-8"));
+                            // Discriminated narrowing
+                            if (msg.kind === "TAB_UPDATE") {
                                 this.activeTabInfo = { url: msg.url, title: msg.title };
                                 return;
                             }
-                            if (msg.requestId && this.pendingRequests.has(msg.requestId)) {
+                            if (this.pendingRequests.has(msg.requestId)) {
                                 const req = this.pendingRequests.get(msg.requestId);
                                 clearTimeout(req.timer);
                                 this.pendingRequests.delete(msg.requestId);
-                                if (msg.error) {
+                                if (msg.kind === "error") {
                                     req.reject(new Error(msg.error));
                                 }
-                                else {
+                                else if (msg.kind === "success") {
                                     req.resolve(msg.data);
                                 }
                             }
                         }
                         catch (err) {
-                            console.error("[BrowserRelay] Message parse error:", err.message);
+                            const message = err instanceof Error ? err.message : String(err);
+                            console.error("[BrowserRelay] Message parse error:", message);
                         }
                     });
                     ws.on("close", () => {
@@ -58,7 +61,8 @@ export class BrowserRelay {
                 });
             }
             catch (err) {
-                reject(err);
+                const error = err instanceof Error ? err : new Error(String(err));
+                reject(error);
             }
         });
     }
@@ -68,25 +72,18 @@ export class BrowserRelay {
     getActiveTabInfo() {
         return this.activeTabInfo;
     }
-    sendCommand(action, payload = {}, target, timeoutMs = 30000) {
+    sendCommand(builder, timeoutMs = 30000) {
         if (!this.isConnected()) {
-            return Promise.reject(new Error("Browser extension is not connected to ws://127.0.0.1:" +
-                this.port +
-                ". Make sure Firefox has the extension installed and running."));
+            return Promise.reject(new Error(`Browser extension is not connected to ws://127.0.0.1:${this.port}. Please ensure Firefox is running and the extension is loaded.`));
         }
-        const requestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+        const requestId = createRequestId();
+        const command = builder(requestId);
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
                 this.pendingRequests.delete(requestId);
-                reject(new Error(`Browser command '${action}' timed out after ${timeoutMs}ms`));
+                reject(new Error(`Browser command '${command.kind}' timed out after ${timeoutMs}ms`));
             }, timeoutMs);
             this.pendingRequests.set(requestId, { resolve, reject, timer });
-            const command = {
-                requestId,
-                action,
-                target,
-                payload
-            };
             this.activeClient.send(JSON.stringify(command));
         });
     }

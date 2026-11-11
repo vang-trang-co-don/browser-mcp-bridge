@@ -1,21 +1,26 @@
+interface WindowWithHook extends Window {
+  __BROWSER_MCP_HOOKED__?: boolean;
+}
+
 (() => {
-  if ((window as any).__BROWSER_MCP_HOOKED__) return;
-  (window as any).__BROWSER_MCP_HOOKED__ = true;
+  const win = window as WindowWithHook;
+  if (win.__BROWSER_MCP_HOOKED__) return;
+  win.__BROWSER_MCP_HOOKED__ = true;
 
   // Read current script nonce to authorize message channel
   const currentScript = document.currentScript as HTMLScriptElement | null;
   const NONCE = currentScript?.dataset.mcpNonce || "";
 
-  function safeClone(data: any, depth = 0): any {
+  function safeClone(data: unknown, depth = 0): unknown {
     if (depth > 4) return "[Object too deep]";
     try {
       if (data === null || data === undefined) return data;
       if (typeof data !== "object") return data;
       if (Array.isArray(data)) return data.slice(0, 50).map((x) => safeClone(x, depth + 1));
-      const res: Record<string, any> = {};
-      const keys = Object.keys(data).slice(0, 50);
+      const res: Record<string, unknown> = {};
+      const keys = Object.keys(data as Record<string, unknown>).slice(0, 50);
       for (const k of keys) {
-        res[k] = safeClone(data[k], depth + 1);
+        res[k] = safeClone((data as Record<string, unknown>)[k], depth + 1);
       }
       return res;
     } catch {
@@ -23,7 +28,7 @@
     }
   }
 
-  function emitRecord(reqData: any) {
+  function emitRecord(reqData: unknown): void {
     window.postMessage(
       {
         nonce: NONCE,
@@ -36,12 +41,11 @@
 
   // Hook window.fetch
   const originalFetch = window.fetch;
-  window.fetch = async function (...args: any[]) {
+  window.fetch = async function (...args: Parameters<typeof originalFetch>): Promise<Response> {
     const start = Date.now();
     let url = "";
     let method = "GET";
-    let reqHeaders: Record<string, string> = {};
-    let reqBody: any = null;
+    let reqBody: unknown = null;
 
     try {
       if (typeof args[0] === "string") {
@@ -53,8 +57,7 @@
 
       if (args[1]) {
         method = args[1].method || method;
-        reqHeaders = args[1].headers || {};
-        reqBody = args[1].body || null;
+        reqBody = args[1].body ?? null;
       }
     } catch {}
 
@@ -62,8 +65,8 @@
 
     let response: Response;
     try {
-      response = await originalFetch.apply(this, args as any);
-    } catch (err: any) {
+      response = await originalFetch.apply(this, args);
+    } catch (err: unknown) {
       emitRecord({
         id: reqId,
         url,
@@ -82,7 +85,7 @@
       if (contentType.includes("json")) {
         clone
           .json()
-          .then((json) => {
+          .then((json: unknown) => {
             emitRecord({
               id: reqId,
               url,
@@ -98,7 +101,7 @@
       } else if (contentType.includes("text") || contentType.includes("xml")) {
         clone
           .text()
-          .then((text) => {
+          .then((text: string) => {
             emitRecord({
               id: reqId,
               url,
@@ -125,8 +128,16 @@
     return response;
   };
 
+  interface PageCommandEvent {
+    readonly nonce: string;
+    readonly type: string;
+    readonly action: "EXEC_FETCH" | "EXEC_EVAL";
+    readonly requestId: string;
+    readonly payload: unknown;
+  }
+
   // Listen to command requests from content script
-  window.addEventListener("message", async (event: MessageEvent) => {
+  window.addEventListener("message", async (event: MessageEvent<PageCommandEvent>) => {
     if (event.source !== window || !event.data || event.data.nonce !== NONCE) return;
     if (event.data.type !== "COMMAND_REQUEST") return;
 
@@ -134,23 +145,31 @@
 
     if (action === "EXEC_FETCH") {
       try {
-        const { url, method = "GET", headers = {}, body } = payload || {};
-        const fetchOpts: RequestInit = {
-          method,
-          headers: { ...headers }
+        const p = (typeof payload === "object" && payload !== null ? payload : {}) as {
+          url?: string;
+          method?: string;
+          headers?: Record<string, string>;
+          body?: unknown;
         };
 
-        if (body !== undefined && method !== "GET" && method !== "HEAD") {
-          fetchOpts.body = typeof body === "object" ? JSON.stringify(body) : String(body);
+        if (!p.url) throw new Error("Missing url for EXEC_FETCH");
+
+        const fetchOpts: RequestInit = {
+          method: p.method || "GET",
+          headers: { ...(p.headers || {}) }
+        };
+
+        if (p.body !== undefined && fetchOpts.method !== "GET" && fetchOpts.method !== "HEAD") {
+          fetchOpts.body = typeof p.body === "object" ? JSON.stringify(p.body) : String(p.body);
           const hdrs = fetchOpts.headers as Record<string, string>;
           if (!hdrs["Content-Type"] && !hdrs["content-type"]) {
             hdrs["Content-Type"] = "application/json";
           }
         }
 
-        const resp = await originalFetch(url, fetchOpts);
+        const resp = await originalFetch(p.url, fetchOpts);
         const ct = resp.headers.get("content-type") || "";
-        let data: any;
+        let data: unknown;
         if (ct.includes("json")) {
           data = await resp.json();
         } else {
@@ -177,13 +196,13 @@
           },
           "*"
         );
-      } catch (err: any) {
+      } catch (err: unknown) {
         window.postMessage(
           {
             nonce: NONCE,
             type: "COMMAND_RESPONSE",
             requestId,
-            error: String(err)
+            error: err instanceof Error ? err.message : String(err)
           },
           "*"
         );
@@ -193,9 +212,12 @@
 
     if (action === "EXEC_EVAL") {
       try {
-        const { script } = payload || {};
-        const fn = new Function(`return (async () => { ${script} })()`);
-        const result = await fn();
+        const p = (typeof payload === "object" && payload !== null ? payload : {}) as { script?: string };
+        if (!p.script) throw new Error("Missing script for EXEC_EVAL");
+
+        const fn = new Function(`return (async () => { ${p.script} })()`);
+        const result: unknown = await fn();
+
         window.postMessage(
           {
             nonce: NONCE,
@@ -207,13 +229,13 @@
           },
           "*"
         );
-      } catch (err: any) {
+      } catch (err: unknown) {
         window.postMessage(
           {
             nonce: NONCE,
             type: "COMMAND_RESPONSE",
             requestId,
-            error: String(err)
+            error: err instanceof Error ? err.message : String(err)
           },
           "*"
         );

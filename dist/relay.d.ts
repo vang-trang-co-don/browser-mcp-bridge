@@ -1,22 +1,17 @@
-import { BridgeAction, TabTarget } from "./shared/types.js";
-export interface PendingRequest {
-    resolve: (value: any) => void;
-    reject: (reason: any) => void;
-    timer: NodeJS.Timeout;
-}
+import { BridgeCommand, RequestId } from "./shared/types.js";
 export declare class BrowserRelay {
-    private port;
+    private readonly port;
     private wss;
     private activeClient;
-    private pendingRequests;
+    private readonly pendingRequests;
     private activeTabInfo;
     constructor(port?: number);
     start(): Promise<void>;
     isConnected(): boolean;
     getActiveTabInfo(): {
-        url?: string;
-        title?: string;
+        readonly url?: string;
+        readonly title?: string;
     };
-    sendCommand<T = any>(action: BridgeAction, payload?: any, target?: TabTarget, timeoutMs?: number): Promise<T>;
+    sendCommand<T>(builder: (id: RequestId) => BridgeCommand, timeoutMs?: number): Promise<T>;
     stop(): Promise<void>;
 }

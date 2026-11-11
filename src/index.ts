@@ -9,10 +9,12 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { BrowserRelay } from "./relay.js";
 import {
-  FetchParams,
-  EvalParams,
-  GetRecentRequestsParams,
-  TabInfo
+  FetchParamsSchema,
+  EvalParamsSchema,
+  GetRecentRequestsParamsSchema,
+  TabInfo,
+  FetchResult,
+  EvalResult
 } from "./shared/types.js";
 
 const PORT = parseInt(process.env.BROWSER_MCP_PORT || "8765", 10);
@@ -30,7 +32,27 @@ const server = new Server(
   }
 );
 
-// Define tools
+type ToolName =
+  | "browser_list_tabs"
+  | "browser_get_active_tab"
+  | "browser_get_recent_requests"
+  | "browser_fetch"
+  | "browser_eval";
+
+function isKnownTool(name: string): name is ToolName {
+  return [
+    "browser_list_tabs",
+    "browser_get_active_tab",
+    "browser_get_recent_requests",
+    "browser_fetch",
+    "browser_eval"
+  ].includes(name);
+}
+
+function assertExhaustive(value: never): never {
+  throw new McpError(ErrorCode.MethodNotFound, `Unhandled tool variant: ${String(value)}`);
+}
+
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
@@ -143,19 +165,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 // Handle tool executions
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: rawArgs } = request.params;
-  const args = rawArgs || {};
+
+  if (!isKnownTool(name)) {
+    throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
+  }
 
   try {
     switch (name) {
       case "browser_list_tabs": {
-        const tabs = await relay.sendCommand<TabInfo[]>("LIST_TABS", {});
+        const tabs = await relay.sendCommand<readonly TabInfo[]>((requestId) => ({
+          kind: "LIST_TABS",
+          requestId
+        }));
         return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(tabs, null, 2)
-            }
-          ]
+          content: [{ type: "text", text: JSON.stringify(tabs, null, 2) }]
         };
       }
 
@@ -181,59 +204,55 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "browser_get_recent_requests": {
-        const params: GetRecentRequestsParams = args as any;
-        const target = { tabId: params.tabId, urlMatch: params.urlMatch };
-        const result = await relay.sendCommand("GET_RECENT_REQUESTS", params, target);
+        const { tabId, urlMatch, ...payload } = GetRecentRequestsParamsSchema.parse(rawArgs);
+        const target = tabId || urlMatch ? { tabId, urlMatch } : undefined;
+        const result = await relay.sendCommand((requestId) => ({
+          kind: "GET_RECENT_REQUESTS",
+          requestId,
+          target,
+          payload
+        }));
         return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(result, null, 2)
-            }
-          ]
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
         };
       }
 
       case "browser_fetch": {
-        const params: FetchParams = args as any;
-        const target = { tabId: params.tabId, urlMatch: params.urlMatch };
-        const result = await relay.sendCommand("EXEC_FETCH", params, target);
+        const { tabId, urlMatch, ...payload } = FetchParamsSchema.parse(rawArgs);
+        const target = tabId || urlMatch ? { tabId, urlMatch } : undefined;
+        const result = await relay.sendCommand<FetchResult>((requestId) => ({
+          kind: "EXEC_FETCH",
+          requestId,
+          target,
+          payload
+        }));
         return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(result, null, 2)
-            }
-          ]
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
         };
       }
 
       case "browser_eval": {
-        const params: EvalParams = args as any;
-        const target = { tabId: params.tabId, urlMatch: params.urlMatch };
-        const result = await relay.sendCommand("EXEC_EVAL", params, target);
+        const { tabId, urlMatch, ...payload } = EvalParamsSchema.parse(rawArgs);
+        const target = tabId || urlMatch ? { tabId, urlMatch } : undefined;
+        const result = await relay.sendCommand<EvalResult>((requestId) => ({
+          kind: "EXEC_EVAL",
+          requestId,
+          target,
+          payload
+        }));
         return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(result, null, 2)
-            }
-          ]
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
         };
       }
 
       default:
-        throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
+        return assertExhaustive(name);
     }
-  } catch (error: any) {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
     return {
       isError: true,
-      content: [
-        {
-          type: "text",
-          text: `Error executing ${name}: ${error.message}`
-        }
-      ]
+      content: [{ type: "text", text: `Error executing ${name}: ${message}` }]
     };
   }
 });
@@ -245,7 +264,8 @@ async function main() {
   console.error("[browser-mcp-bridge] MCP Server running on stdio");
 }
 
-main().catch((err) => {
-  console.error("[browser-mcp-bridge] Fatal error:", err);
+main().catch((err: unknown) => {
+  const message = err instanceof Error ? err.message : String(err);
+  console.error("[browser-mcp-bridge] Fatal error:", message);
   process.exit(1);
 });

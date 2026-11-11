@@ -3,22 +3,22 @@ import type {
   BridgeResponse,
   CapturedRequest,
   TabInfo,
-  TabTarget
+  TabTarget,
+  RequestId
 } from "../../src/shared/types.js";
 
-// Use standard WebExtension API (browser or chrome)
 declare const browser: typeof import("firefox-webext-browser");
-const extApi = typeof browser !== "undefined" ? browser : (chrome as any);
+const extApi = typeof browser !== "undefined" ? browser : (chrome as unknown as typeof browser);
 
 const WS_URL = "ws://127.0.0.1:8765";
 let ws: WebSocket | null = null;
-let reconnectTimer: any = null;
+let reconnectTimer: NodeJS.Timeout | null = null;
 
 // Persistent per-tab rolling request buffer in background memory (survives page reloads!)
 const tabBuffers = new Map<number, CapturedRequest[]>();
 const MAX_BUFFER_PER_TAB = 50;
 
-function updateBadge(connected: boolean) {
+function updateBadge(connected: boolean): void {
   try {
     if (extApi.browserAction) {
       extApi.browserAction.setBadgeText({ text: connected ? "ON" : "OFF" });
@@ -29,14 +29,14 @@ function updateBadge(connected: boolean) {
   } catch {}
 }
 
-async function notifyActiveTab() {
+async function notifyActiveTab(): Promise<void> {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   try {
     const tabs = await extApi.tabs.query({ active: true, currentWindow: true });
     if (tabs && tabs[0]) {
       ws.send(
         JSON.stringify({
-          type: "TAB_UPDATE",
+          kind: "TAB_UPDATE",
           url: tabs[0].url,
           title: tabs[0].title
         })
@@ -45,12 +45,12 @@ async function notifyActiveTab() {
   } catch {}
 }
 
-async function resolveTargetTab(target?: TabTarget): Promise<any> {
+async function resolveTargetTab(target?: TabTarget): Promise<browser.tabs.Tab> {
   const allTabs = await extApi.tabs.query({});
 
   // 1. Explicit Tab ID
   if (target?.tabId !== undefined) {
-    const found = allTabs.find((t: any) => t.id === target.tabId);
+    const found = allTabs.find((t) => t.id === target.tabId);
     if (found) return found;
     throw new Error(`Tab ID ${target.tabId} not found in open tabs`);
   }
@@ -58,7 +58,7 @@ async function resolveTargetTab(target?: TabTarget): Promise<any> {
   // 2. Explicit URL Pattern (e.g. "hoadondientu.gdt.gov.vn" or "ipos.vn")
   if (target?.urlMatch) {
     const q = target.urlMatch.toLowerCase();
-    const found = allTabs.find((t: any) => t.url && t.url.toLowerCase().includes(q));
+    const found = allTabs.find((t) => t.url && t.url.toLowerCase().includes(q));
     if (found) return found;
     throw new Error(`No open tab matching URL pattern: "${target.urlMatch}"`);
   }
@@ -71,7 +71,25 @@ async function resolveTargetTab(target?: TabTarget): Promise<any> {
   throw new Error("No browser tab is currently open");
 }
 
-function connect() {
+function sendSuccess<T>(requestId: RequestId, data: T): void {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    const resp: BridgeResponse<T> = { kind: "success", requestId, data };
+    ws.send(JSON.stringify(resp));
+  }
+}
+
+function sendError(requestId: RequestId, error: string): void {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    const resp: BridgeResponse = { kind: "error", requestId, error };
+    ws.send(JSON.stringify(resp));
+  }
+}
+
+function assertExhaustive(value: never): never {
+  throw new Error(`Unhandled command variant: ${JSON.stringify(value)}`);
+}
+
+function connect(): void {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
     return;
   }
@@ -85,88 +103,99 @@ function connect() {
       notifyActiveTab();
     };
 
-    ws.onmessage = async (event: MessageEvent) => {
+    ws.onmessage = async (event: MessageEvent<string>) => {
       try {
-        const cmd: BridgeCommand = JSON.parse(event.data);
-        const { requestId, action, target, payload } = cmd;
+        const cmd = JSON.parse(event.data) as BridgeCommand;
 
-        // LIST_TABS handled directly by background
-        if (action === "LIST_TABS") {
-          const rawTabs = await extApi.tabs.query({});
-          const tabList: TabInfo[] = rawTabs.map((t: any) => ({
-            id: t.id!,
-            url: t.url || "",
-            title: t.title || "",
-            active: Boolean(t.active),
-            windowId: t.windowId
-          }));
-          sendResponse({ requestId, data: tabList });
-          return;
-        }
-
-        // Resolve target tab deterministically (no focus race condition)
-        let targetTab: any;
-        try {
-          targetTab = await resolveTargetTab(target);
-        } catch (err: any) {
-          sendResponse({ requestId, error: err.message });
-          return;
-        }
-
-        const tabId = targetTab.id!;
-
-        // GET_RECENT_REQUESTS can also merge background buffer
-        if (action === "GET_RECENT_REQUESTS") {
-          const bgBuffer = tabBuffers.get(tabId) || [];
-          let filtered = [...bgBuffer];
-          if (payload?.filterUrl) {
-            const q = String(payload.filterUrl).toLowerCase();
-            filtered = filtered.filter((r) => r.url && r.url.toLowerCase().includes(q));
+        // Discriminated union switch over command kinds
+        switch (cmd.kind) {
+          case "LIST_TABS": {
+            const rawTabs = await extApi.tabs.query({});
+            const tabList: TabInfo[] = rawTabs.map((t) => ({
+              id: t.id ?? -1,
+              url: t.url || "",
+              title: t.title || "",
+              active: Boolean(t.active),
+              windowId: t.windowId ?? -1
+            }));
+            sendSuccess(cmd.requestId, tabList);
+            break;
           }
-          const limit = payload?.limit ? Math.min(payload.limit, 50) : 10;
-          sendResponse({
-            requestId,
-            data: {
-              targetTab: { id: tabId, url: targetTab.url, title: targetTab.title },
+
+          case "GET_RECENT_REQUESTS": {
+            let targetTab: browser.tabs.Tab;
+            try {
+              targetTab = await resolveTargetTab(cmd.target);
+            } catch (err: unknown) {
+              const msg = err instanceof Error ? err.message : String(err);
+              sendError(cmd.requestId, msg);
+              break;
+            }
+
+            const tabId = targetTab.id ?? -1;
+            const bgBuffer = tabBuffers.get(tabId) || [];
+            let filtered = [...bgBuffer];
+            if (cmd.payload.filterUrl) {
+              const q = cmd.payload.filterUrl.toLowerCase();
+              filtered = filtered.filter((r) => r.url.toLowerCase().includes(q));
+            }
+            const limit = Math.min(cmd.payload.limit, 50);
+
+            sendSuccess(cmd.requestId, {
+              targetTab: { id: tabId, url: targetTab.url || "", title: targetTab.title || "" },
               requests: filtered.slice(-limit).reverse()
-            }
-          });
-          return;
-        }
-
-        // Delegate EXEC_FETCH & EXEC_EVAL to content script
-        extApi.tabs.sendMessage(
-          tabId,
-          { action, requestId, payload },
-          (response: any) => {
-            if (extApi.runtime.lastError) {
-              sendResponse({
-                requestId,
-                error: `Tab message error on tab ${tabId} (${targetTab.url}): ${extApi.runtime.lastError.message}. Make sure the page has completed loading.`
-              });
-              return;
-            }
-
-            if (!response) {
-              sendResponse({
-                requestId,
-                error: `Empty response from tab ${tabId} content script`
-              });
-              return;
-            }
-
-            sendResponse({
-              requestId,
-              data: {
-                ...response.data,
-                resolvedTab: { id: tabId, url: targetTab.url, title: targetTab.title }
-              },
-              error: response.error
             });
+            break;
           }
-        );
-      } catch (err: any) {
-        console.error("[BrowserMCP-BG] Message dispatch error:", err);
+
+          case "EXEC_FETCH":
+          case "EXEC_EVAL": {
+            let targetTab: browser.tabs.Tab;
+            try {
+              targetTab = await resolveTargetTab(cmd.target);
+            } catch (err: unknown) {
+              const msg = err instanceof Error ? err.message : String(err);
+              sendError(cmd.requestId, msg);
+              break;
+            }
+
+            const tabId = targetTab.id ?? -1;
+            extApi.tabs.sendMessage(
+              tabId,
+              { kind: cmd.kind, requestId: cmd.requestId, payload: cmd.payload },
+              (response: { data?: unknown; error?: string } | undefined) => {
+                if (extApi.runtime.lastError) {
+                  sendError(
+                    cmd.requestId,
+                    `Tab message error on tab ${tabId} (${targetTab.url}): ${extApi.runtime.lastError.message}. Make sure the page has completed loading.`
+                  );
+                  return;
+                }
+
+                if (!response) {
+                  sendError(cmd.requestId, `Empty response from tab ${tabId} content script`);
+                  return;
+                }
+
+                if (response.error) {
+                  sendError(cmd.requestId, response.error);
+                } else {
+                  sendSuccess(cmd.requestId, {
+                    ...(typeof response.data === "object" && response.data !== null ? response.data : { result: response.data }),
+                    resolvedTab: { id: tabId, url: targetTab.url || "", title: targetTab.title || "" }
+                  });
+                }
+              }
+            );
+            break;
+          }
+
+          default:
+            assertExhaustive(cmd);
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error("[BrowserMCP-BG] Message dispatch error:", msg);
       }
     };
 
@@ -184,27 +213,28 @@ function connect() {
   }
 }
 
-function sendResponse(resp: BridgeResponse) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(resp));
-  }
-}
-
-function scheduleReconnect() {
+function scheduleReconnect(): void {
   if (reconnectTimer) clearTimeout(reconnectTimer);
   reconnectTimer = setTimeout(connect, 3000);
 }
 
 // Receive recorded requests from content scripts and store in background memory
-extApi.runtime.onMessage.addListener((msg: any, sender: any) => {
-  if (msg?.type === "RECORD_REQUEST" && sender.tab?.id) {
+extApi.runtime.onMessage.addListener((msg: unknown, sender: browser.runtime.MessageSender) => {
+  if (
+    typeof msg === "object" &&
+    msg !== null &&
+    "type" in msg &&
+    msg.type === "RECORD_REQUEST" &&
+    "request" in msg &&
+    sender.tab?.id !== undefined
+  ) {
     const tabId = sender.tab.id;
     if (!tabBuffers.has(tabId)) {
       tabBuffers.set(tabId, []);
     }
     const buf = tabBuffers.get(tabId)!;
     buf.push({
-      ...msg.request,
+      ...(msg.request as CapturedRequest),
       tabId,
       tabUrl: sender.tab.url
     });
@@ -212,16 +242,17 @@ extApi.runtime.onMessage.addListener((msg: any, sender: any) => {
   }
 });
 
-// Clean up buffer when tab is closed
 extApi.tabs.onRemoved.addListener((tabId: number) => {
   tabBuffers.delete(tabId);
 });
 
-// Active tab listeners
-extApi.tabs.onActivated.addListener(() => notifyActiveTab());
-extApi.tabs.onUpdated.addListener((tabId: number, changeInfo: any, tab: any) => {
+extApi.tabs.onActivated.addListener(() => {
+  void notifyActiveTab();
+});
+
+extApi.tabs.onUpdated.addListener((_tabId: number, changeInfo: browser.tabs._OnUpdatedChangeInfo, tab: browser.tabs.Tab) => {
   if (changeInfo.status === "complete" && tab.active) {
-    notifyActiveTab();
+    void notifyActiveTab();
   }
 });
 
