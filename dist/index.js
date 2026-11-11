@@ -18,8 +18,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
         tools: [
             {
+                name: "browser_list_tabs",
+                description: "Lists all open browser tabs (id, url, title, active). Use this to explicitly pick a tabId or confirm the target web application is open.",
+                inputSchema: {
+                    type: "object",
+                    properties: {}
+                }
+            },
+            {
                 name: "browser_get_active_tab",
-                description: "Returns the URL, title, and connection status of the currently active browser tab.",
+                description: "Returns the URL, title, and connection status of the currently focused browser tab.",
                 inputSchema: {
                     type: "object",
                     properties: {}
@@ -27,13 +35,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             {
                 name: "browser_get_recent_requests",
-                description: "Returns the rolling buffer of recent XHR and Fetch network requests recorded from the active tab. Useful for discovering API endpoints and schemas by observing user actions.",
+                description: "Returns the rolling buffer of recent XHR and Fetch network requests recorded from the target tab. Useful for discovering API endpoints and schemas by observing user actions.",
                 inputSchema: {
                     type: "object",
                     properties: {
+                        tabId: {
+                            type: "number",
+                            description: "Optional explicit tab ID to inspect. Immune to user switching tabs."
+                        },
+                        urlMatch: {
+                            type: "string",
+                            description: "Optional URL substring to target (e.g. 'hoadondientu.gdt.gov.vn' or 'ipos.vn')"
+                        },
                         filterUrl: {
                             type: "string",
-                            description: "Optional case-insensitive substring to filter request URLs"
+                            description: "Optional case-insensitive substring to filter captured request URLs"
                         },
                         limit: {
                             type: "number",
@@ -44,17 +60,25 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             {
                 name: "browser_fetch",
-                description: "Executes an authenticated HTTP fetch call directly inside the active browser tab context. Retains all cookies, session tokens, and bypasses CORS/WAF rules.",
+                description: "Executes an authenticated HTTP fetch call directly inside the target browser tab context. Retains all cookies, session tokens, and bypasses CORS/WAF rules.",
                 inputSchema: {
                     type: "object",
                     properties: {
+                        tabId: {
+                            type: "number",
+                            description: "Optional explicit tab ID. Immune to user switching tabs."
+                        },
+                        urlMatch: {
+                            type: "string",
+                            description: "Optional URL substring to match (e.g. 'ipos.vn' or 'gdt.gov.vn')"
+                        },
                         url: {
                             type: "string",
                             description: "Absolute or relative URL to fetch"
                         },
                         method: {
                             type: "string",
-                            enum: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+                            enum: ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
                             description: "HTTP method (defaults to GET)"
                         },
                         headers: {
@@ -71,10 +95,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             {
                 name: "browser_eval",
-                description: "Evaluates a JavaScript expression inside the active browser tab DOM context and returns the result.",
+                description: "Evaluates a JavaScript expression inside the target browser tab DOM context and returns the result.",
                 inputSchema: {
                     type: "object",
                     properties: {
+                        tabId: {
+                            type: "number",
+                            description: "Optional explicit tab ID. Immune to user switching tabs."
+                        },
+                        urlMatch: {
+                            type: "string",
+                            description: "Optional URL substring to match (e.g. 'ipos.vn' or 'gdt.gov.vn')"
+                        },
                         script: {
                             type: "string",
                             description: "JavaScript expression or async function body to evaluate"
@@ -88,9 +120,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 });
 // Handle tool executions
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args } = request.params;
+    const { name, arguments: rawArgs } = request.params;
+    const args = rawArgs || {};
     try {
         switch (name) {
+            case "browser_list_tabs": {
+                const tabs = await relay.sendCommand("LIST_TABS", {});
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify(tabs, null, 2)
+                        }
+                    ]
+                };
+            }
             case "browser_get_active_tab": {
                 const info = relay.getActiveTabInfo();
                 const connected = relay.isConnected();
@@ -108,7 +152,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 };
             }
             case "browser_get_recent_requests": {
-                const result = await relay.sendCommand("GET_RECENT_REQUESTS", args || {});
+                const params = args;
+                const target = { tabId: params.tabId, urlMatch: params.urlMatch };
+                const result = await relay.sendCommand("GET_RECENT_REQUESTS", params, target);
                 return {
                     content: [
                         {
@@ -119,7 +165,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 };
             }
             case "browser_fetch": {
-                const result = await relay.sendCommand("EXEC_FETCH", args || {});
+                const params = args;
+                const target = { tabId: params.tabId, urlMatch: params.urlMatch };
+                const result = await relay.sendCommand("EXEC_FETCH", params, target);
                 return {
                     content: [
                         {
@@ -130,7 +178,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 };
             }
             case "browser_eval": {
-                const result = await relay.sendCommand("EXEC_EVAL", args || {});
+                const params = args;
+                const target = { tabId: params.tabId, urlMatch: params.urlMatch };
+                const result = await relay.sendCommand("EXEC_EVAL", params, target);
                 return {
                     content: [
                         {

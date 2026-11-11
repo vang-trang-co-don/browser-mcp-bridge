@@ -8,8 +8,10 @@
     "browser-mcp-bridge": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
-    "start": "tsc && node dist/index.js",
+    "build:server": "tsc",
+    "build:extension": "bun build extension/src/background.ts extension/src/content.ts extension/src/injected.ts extension/src/popup.ts --outdir extension/dist",
+    "build": "npm run build:server && npm run build:extension",
+    "start": "node dist/index.js",
     "dev": "tsc -w"
   },
   "dependencies": {
@@ -17,6 +19,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@types/firefox-webext-browser": "^143.0.1",
     "@types/node": "^22.10.1",
     "@types/ws": "^8.5.13",
     "typescript": "^5.7.2"

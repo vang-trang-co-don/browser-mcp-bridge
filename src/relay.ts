@@ -1,4 +1,11 @@
 import { WebSocketServer, WebSocket } from "ws";
+import {
+  BridgeAction,
+  BridgeCommand,
+  BridgeResponse,
+  TabTarget,
+  TabInfo
+} from "./shared/types.js";
 
 export interface PendingRequest {
   resolve: (value: any) => void;
@@ -20,7 +27,6 @@ export class BrowserRelay {
         this.wss = new WebSocketServer({ port: this.port, host: "127.0.0.1" });
 
         this.wss.on("listening", () => {
-          // Log to stderr so stdout remains clean for MCP JSON-RPC
           console.error(`[BrowserRelay] Listening on ws://127.0.0.1:${this.port}`);
           resolve();
         });
@@ -31,15 +37,14 @@ export class BrowserRelay {
 
           ws.on("message", (raw: string) => {
             try {
-              const msg = JSON.parse(raw.toString());
+              const msg: BridgeResponse & { type?: string; url?: string; title?: string } =
+                JSON.parse(raw.toString());
 
-              // Heartbeat / Tab info update
               if (msg.type === "TAB_UPDATE") {
                 this.activeTabInfo = { url: msg.url, title: msg.title };
                 return;
               }
 
-              // Response to pending request
               if (msg.requestId && this.pendingRequests.has(msg.requestId)) {
                 const req = this.pendingRequests.get(msg.requestId)!;
                 clearTimeout(req.timer);
@@ -86,7 +91,12 @@ export class BrowserRelay {
     return this.activeTabInfo;
   }
 
-  public sendCommand<T = any>(action: string, payload: any = {}, timeoutMs: number = 30000): Promise<T> {
+  public sendCommand<T = any>(
+    action: BridgeAction,
+    payload: any = {},
+    target?: TabTarget,
+    timeoutMs: number = 30000
+  ): Promise<T> {
     if (!this.isConnected()) {
       return Promise.reject(
         new Error(
@@ -107,13 +117,14 @@ export class BrowserRelay {
 
       this.pendingRequests.set(requestId, { resolve, reject, timer });
 
-      const msg = JSON.stringify({
+      const command: BridgeCommand = {
         requestId,
         action,
+        target,
         payload
-      });
+      };
 
-      this.activeClient!.send(msg);
+      this.activeClient!.send(JSON.stringify(command));
     });
   }
 

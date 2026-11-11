@@ -1,3 +1,4 @@
+import { BridgeAction, TabTarget } from "./shared/types.js";
 export interface PendingRequest {
     resolve: (value: any) => void;
     reject: (reason: any) => void;
@@ -16,6 +17,6 @@ export declare class BrowserRelay {
         url?: string;
         title?: string;
     };
-    sendCommand<T = any>(action: string, payload?: any, timeoutMs?: number): Promise<T>;
+    sendCommand<T = any>(action: BridgeAction, payload?: any, target?: TabTarget, timeoutMs?: number): Promise<T>;
     stop(): Promise<void>;
 }

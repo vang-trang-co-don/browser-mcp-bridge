@@ -1,5 +1,7 @@
 (() => {
   const statusContainer = document.getElementById("statusContainer");
+  if (!statusContainer) return;
+
   const testWs = new WebSocket("ws://127.0.0.1:8765");
 
   testWs.onopen = () => {

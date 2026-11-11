@@ -9,16 +9,16 @@
     "webNavigation"
   ],
   "web_accessible_resources": [
-    "injected.js"
+    "dist/injected.js"
   ],
   "background": {
-    "scripts": ["background.js"],
+    "scripts": ["dist/background.js"],
     "persistent": true
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["dist/content.js"],
       "run_at": "document_start",
       "all_frames": false
     }

@@ -13,7 +13,6 @@ export class BrowserRelay {
             try {
                 this.wss = new WebSocketServer({ port: this.port, host: "127.0.0.1" });
                 this.wss.on("listening", () => {
-                    // Log to stderr so stdout remains clean for MCP JSON-RPC
                     console.error(`[BrowserRelay] Listening on ws://127.0.0.1:${this.port}`);
                     resolve();
                 });
@@ -23,12 +22,10 @@ export class BrowserRelay {
                     ws.on("message", (raw) => {
                         try {
                             const msg = JSON.parse(raw.toString());
-                            // Heartbeat / Tab info update
                             if (msg.type === "TAB_UPDATE") {
                                 this.activeTabInfo = { url: msg.url, title: msg.title };
                                 return;
                             }
-                            // Response to pending request
                             if (msg.requestId && this.pendingRequests.has(msg.requestId)) {
                                 const req = this.pendingRequests.get(msg.requestId);
                                 clearTimeout(req.timer);
@@ -71,7 +68,7 @@ export class BrowserRelay {
     getActiveTabInfo() {
         return this.activeTabInfo;
     }
-    sendCommand(action, payload = {}, timeoutMs = 30000) {
+    sendCommand(action, payload = {}, target, timeoutMs = 30000) {
         if (!this.isConnected()) {
             return Promise.reject(new Error("Browser extension is not connected to ws://127.0.0.1:" +
                 this.port +
@@ -84,12 +81,13 @@ export class BrowserRelay {
                 reject(new Error(`Browser command '${action}' timed out after ${timeoutMs}ms`));
             }, timeoutMs);
             this.pendingRequests.set(requestId, { resolve, reject, timer });
-            const msg = JSON.stringify({
+            const command = {
                 requestId,
                 action,
+                target,
                 payload
-            });
-            this.activeClient.send(msg);
+            };
+            this.activeClient.send(JSON.stringify(command));
         });
     }
     stop() {
